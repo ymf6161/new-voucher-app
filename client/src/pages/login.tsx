@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { setDemoSession } from "@/lib/demo-store";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthLayout } from "@/components/auth-layout";
+import { useToast } from "@/hooks/use-toast";
 
-/** Where to go after signing in: the page the user was sent here from, if it's one of ours. */
 export function nextPathFromUrl(): string {
   const next = new URLSearchParams(window.location.search).get("next");
   return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
@@ -19,18 +19,29 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setDemoSession(true);
-    await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-    setLocation(nextPathFromUrl());
-    setLoading(false);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      setLocation(nextPathFromUrl());
+    } catch (err: any) {
+      toast({
+        title: "Sign in failed",
+        description: err?.message || "Invalid email or password.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <AuthLayout title="Sign in" description="Frontend preview. Enter any email and password to open the demo.">
+    <AuthLayout title="Sign in" description="Enter your email and password to access your account.">
       <form onSubmit={handleLogin} className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>

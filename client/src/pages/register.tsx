@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { setDemoSession } from "@/lib/demo-store";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,14 +29,33 @@ export default function Register() {
     }
 
     setLoading(true);
-    setDemoSession(true);
-    await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-    setLocation("/dashboard");
-    setLoading(false);
+    try {
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) throw error;
+
+      if (!data.session) {
+        toast({
+          title: "Account created",
+          description: "Please sign in with your new credentials.",
+        });
+        setLocation("/login");
+      } else {
+        await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+        setLocation("/dashboard");
+      }
+    } catch (err: any) {
+      toast({
+        title: "Registration failed",
+        description: err?.message || "Could not create account. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <AuthLayout title="Create an account" description="Create a local demo session for this browser.">
+    <AuthLayout title="Create an account" description="Set up your organisation's voucher tracking account.">
       <form onSubmit={handleRegister} className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
