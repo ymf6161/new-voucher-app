@@ -124,12 +124,7 @@ async function fetchSettings(): Promise<CompanySettings | null> {
 async function fetchVouchers(params: URLSearchParams): Promise<VoucherWithRelations[]> {
   let q = supabase
     .from("vouchers")
-    .select(`
-      *,
-      voucher_companies!voucher_company_id(*),
-      names!received_from_id(*),
-      references!reference_id(*)
-    `)
+    .select("*")
     .eq("account_id", accountId());
 
   const status = params.get("status");
@@ -159,13 +154,39 @@ async function fetchVouchers(params: URLSearchParams): Promise<VoucherWithRelati
   const { data, error } = await q;
   if (error) throw new Error(error.message);
 
-  return (data || []).map((row: any) => {
+  const voucherRows = data || [];
+  const relatedCompanyIds = [...new Set(voucherRows.map((row: any) => row.voucher_company_id).filter(Boolean))];
+  const receivedFromIds = [...new Set(voucherRows.map((row: any) => row.received_from_id).filter(Boolean))];
+  const referenceIds = [...new Set(voucherRows.map((row: any) => row.reference_id).filter(Boolean))];
+  const currentAccountId = accountId();
+
+  const [companiesResult, namesResult, referencesResult] = await Promise.all([
+    relatedCompanyIds.length
+      ? supabase.from("voucher_companies").select("*").eq("account_id", currentAccountId).in("id", relatedCompanyIds)
+      : Promise.resolve({ data: [], error: null }),
+    receivedFromIds.length
+      ? supabase.from("names").select("*").eq("account_id", currentAccountId).in("id", receivedFromIds)
+      : Promise.resolve({ data: [], error: null }),
+    referenceIds.length
+      ? supabase.from("references").select("*").eq("account_id", currentAccountId).in("id", referenceIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (companiesResult.error) throw new Error(companiesResult.error.message);
+  if (namesResult.error) throw new Error(namesResult.error.message);
+  if (referencesResult.error) throw new Error(referencesResult.error.message);
+
+  const companies = Object.fromEntries((companiesResult.data || []).map((row: any) => [row.id, mapRow<VoucherCompany>(row)]));
+  const names = Object.fromEntries((namesResult.data || []).map((row: any) => [row.id, mapRow<Name>(row)]));
+  const references = Object.fromEntries((referencesResult.data || []).map((row: any) => [row.id, mapRow<Reference>(row)]));
+
+  return voucherRows.map((row: any) => {
     const v = mapRow<Voucher>(row);
     return {
       ...v,
-      voucherCompany: row.voucher_companies ? mapRow<VoucherCompany>(row.voucher_companies) : undefined,
-      receivedFrom: row.names ? mapRow<Name>(row.names) : undefined,
-      reference: row.references ? mapRow<Reference>(row.references) : undefined,
+      voucherCompany: companies[row.voucher_company_id],
+      receivedFrom: names[row.received_from_id],
+      reference: references[row.reference_id],
     } as VoucherWithRelations;
   });
 }
