@@ -64,51 +64,60 @@ function notFound(): Response {
 }
 
 // ---------------------------------------------------------------------------
+// Paging and database functions
+// ---------------------------------------------------------------------------
+
+// Supabase returns at most 1,000 rows per request (the project's "max rows"
+// setting), so every list is read page by page. `build` must return a fresh
+// query each time, ordered by a unique column so pages don't overlap.
+const PAGE_SIZE = 1000;
+
+async function fetchAll<T = any>(build: () => any): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await build().range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    rows.push(...((data || []) as T[]));
+    if (!data || data.length < PAGE_SIZE) return rows;
+  }
+}
+
+// Every row of a table in the current account, archived rows included.
+function fetchAccountRows<T = any>(table: string, columns = "*"): Promise<T[]> {
+  const aid = accountId();
+  return fetchAll<T>(() => supabase.from(table).select(columns).eq("account_id", aid).order("id"));
+}
+
+// Multi-step writes run as one database transaction that re-checks the rules
+// (see supabase/migrations/20261014120000_enforce_voucher_rules.sql).
+async function rpc<T = any>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.rpc(fn, args);
+  if (error) throw new Error(error.message);
+  return data as T;
+}
+
+// ---------------------------------------------------------------------------
 // Queries (GET)
 // ---------------------------------------------------------------------------
 
-async function fetchVoucherCompanies(): Promise<VoucherCompany[]> {
-  const { data, error } = await supabase
-    .from("voucher_companies")
-    .select("*")
-    .eq("account_id", accountId())
-    .eq("is_archived", false)
-    .order("name");
-  if (error) throw new Error(error.message);
-  return (data || []).map((r: any) => mapRow<VoucherCompany>(r));
+async function fetchActive<T>(table: string, orderBy: string): Promise<T[]> {
+  const aid = accountId();
+  const rows = await fetchAll(() =>
+    supabase.from(table).select("*").eq("account_id", aid).eq("is_archived", false).order(orderBy).order("id"),
+  );
+  return rows.map((r: any) => mapRow<T>(r));
 }
 
-async function fetchNames(): Promise<Name[]> {
-  const { data, error } = await supabase
-    .from("names")
-    .select("*")
-    .eq("account_id", accountId())
-    .eq("is_archived", false)
-    .order("name");
-  if (error) throw new Error(error.message);
-  return (data || []).map((r: any) => mapRow<Name>(r));
-}
+const fetchVoucherCompanies = () => fetchActive<VoucherCompany>("voucher_companies", "name");
+const fetchNames = () => fetchActive<Name>("names", "name");
+const fetchReferences = () => fetchActive<Reference>("references", "reference");
+const fetchBanks = () => fetchActive<Bank>("banks", "name");
 
-async function fetchReferences(): Promise<Reference[]> {
-  const { data, error } = await supabase
-    .from("references")
-    .select("*")
-    .eq("account_id", accountId())
-    .eq("is_archived", false)
-    .order("reference");
-  if (error) throw new Error(error.message);
-  return (data || []).map((r: any) => mapRow<Reference>(r));
-}
-
-async function fetchBanks(): Promise<Bank[]> {
-  const { data, error } = await supabase
-    .from("banks")
-    .select("*")
-    .eq("account_id", accountId())
-    .eq("is_archived", false)
-    .order("name");
-  if (error) throw new Error(error.message);
-  return (data || []).map((r: any) => mapRow<Bank>(r));
+// id → row lookups for a whole table, archived rows included, so old
+// vouchers still show the company or person they were recorded against.
+async function lookup<T>(table: string, columns = "*"): Promise<Record<string, T>> {
+  const rows = await fetchAccountRows(table, columns);
+  return Object.fromEntries(rows.map((r: any) => [r.id, mapRow<T>(r)]));
 }
 
 async function fetchSettings(): Promise<CompanySettings | null> {
@@ -122,247 +131,115 @@ async function fetchSettings(): Promise<CompanySettings | null> {
 }
 
 async function fetchVouchers(params: URLSearchParams): Promise<VoucherWithRelations[]> {
-  let q = supabase
-    .from("vouchers")
-    .select("*")
-    .eq("account_id", accountId());
-
+  const aid = accountId();
   const status = params.get("status");
-  if (status) q = q.eq("status", status);
-
   const companyIds = (params.get("companyId") || "").split(",").filter(Boolean);
-  if (companyIds.length) q = q.in("voucher_company_id", companyIds);
 
-  if (params.has("batchId")) q = q.eq("batch_id", params.get("batchId"));
-  if (params.has("depositId")) q = q.eq("deposit_id", params.get("depositId"));
-
+  let batchIds: string[] | null = null;
   if (params.has("recipientId")) {
-    const { data: batchData } = await supabase
-      .from("batches")
-      .select("id")
-      .eq("account_id", accountId())
-      .eq("recipient_name_id", params.get("recipientId"));
-    const batchIds = (batchData || []).map((b: any) => b.id);
-    if (batchIds.length) q = q.in("batch_id", batchIds);
-    else return [];
+    const batches = await fetchAll(() =>
+      supabase.from("batches").select("id").eq("account_id", aid).eq("recipient_name_id", params.get("recipientId")).order("id"),
+    );
+    batchIds = batches.map((b: any) => b.id);
+    if (!batchIds.length) return [];
   }
 
-  if (status === "unposted") q = q.is("batch_id", null);
+  const build = () => {
+    let q = supabase.from("vouchers").select("*").eq("account_id", aid);
+    if (status) q = q.eq("status", status);
+    if (companyIds.length) q = q.in("voucher_company_id", companyIds);
+    if (params.has("batchId")) q = q.eq("batch_id", params.get("batchId"));
+    if (params.has("depositId")) q = q.eq("deposit_id", params.get("depositId"));
+    if (batchIds) q = q.in("batch_id", batchIds);
+    if (status === "unposted") q = q.is("batch_id", null);
+    return q.order("date_received", { ascending: false }).order("id");
+  };
 
-  q = q.order("date_received", { ascending: false });
-
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
-
-  const voucherRows = data || [];
-  const relatedCompanyIds = [...new Set(voucherRows.map((row: any) => row.voucher_company_id).filter(Boolean))];
-  const receivedFromIds = [...new Set(voucherRows.map((row: any) => row.received_from_id).filter(Boolean))];
-  const referenceIds = [...new Set(voucherRows.map((row: any) => row.reference_id).filter(Boolean))];
-  const currentAccountId = accountId();
-
-  const [companiesResult, namesResult, referencesResult] = await Promise.all([
-    relatedCompanyIds.length
-      ? supabase.from("voucher_companies").select("*").eq("account_id", currentAccountId).in("id", relatedCompanyIds)
-      : Promise.resolve({ data: [], error: null }),
-    receivedFromIds.length
-      ? supabase.from("names").select("*").eq("account_id", currentAccountId).in("id", receivedFromIds)
-      : Promise.resolve({ data: [], error: null }),
-    referenceIds.length
-      ? supabase.from("references").select("*").eq("account_id", currentAccountId).in("id", referenceIds)
-      : Promise.resolve({ data: [], error: null }),
+  const [voucherRows, companies, names, references] = await Promise.all([
+    fetchAll(build),
+    lookup<VoucherCompany>("voucher_companies"),
+    lookup<Name>("names"),
+    lookup<Reference>("references"),
   ]);
 
-  if (companiesResult.error) throw new Error(companiesResult.error.message);
-  if (namesResult.error) throw new Error(namesResult.error.message);
-  if (referencesResult.error) throw new Error(referencesResult.error.message);
-
-  const companies = Object.fromEntries((companiesResult.data || []).map((row: any) => [row.id, mapRow<VoucherCompany>(row)]));
-  const names = Object.fromEntries((namesResult.data || []).map((row: any) => [row.id, mapRow<Name>(row)]));
-  const references = Object.fromEntries((referencesResult.data || []).map((row: any) => [row.id, mapRow<Reference>(row)]));
-
-  return voucherRows.map((row: any) => {
-    const v = mapRow<Voucher>(row);
-    return {
-      ...v,
-      voucherCompany: companies[row.voucher_company_id],
-      receivedFrom: names[row.received_from_id],
-      reference: references[row.reference_id],
-    } as VoucherWithRelations;
-  });
+  return voucherRows.map((row: any) => ({
+    ...mapRow<Voucher>(row),
+    voucherCompany: companies[row.voucher_company_id],
+    receivedFrom: names[row.received_from_id],
+    reference: references[row.reference_id],
+  }) as VoucherWithRelations);
 }
 
 async function fetchBatches(): Promise<BatchWithRelations[]> {
-  const { data: batches, error } = await supabase
-    .from("batches")
-    .select("*")
-    .eq("account_id", accountId())
-    .order("date_sent", { ascending: false });
-  if (error) throw new Error(error.message);
+  const aid = accountId();
+  const [batches, vouchers, companies, names, banks] = await Promise.all([
+    fetchAll(() => supabase.from("batches").select("*").eq("account_id", aid).order("date_sent", { ascending: false }).order("id")),
+    fetchAccountRows("vouchers", "id, voucher_company_id, quantity, amount, status, batch_id, deposit_id"),
+    lookup<VoucherCompany>("voucher_companies"),
+    lookup<Name>("names", "id, name"),
+    lookup<Bank>("banks"),
+  ]);
 
-  const { data: vouchers } = await supabase
-    .from("vouchers")
-    .select("id, voucher_company_id, quantity, batch_id")
-    .eq("account_id", accountId());
-
-  const companyIds = [...new Set((vouchers || []).map((v: any) => v.voucher_company_id).filter(Boolean))];
-  let companies: Record<string, string> = {};
-  if (companyIds.length) {
-    const { data: compData } = await supabase
-      .from("voucher_companies")
-      .select("id, name")
-      .in("id", companyIds);
-    companies = Object.fromEntries((compData || []).map((c: any) => [c.id, c.name]));
-  }
-
-  const nameIds = [...new Set((batches || []).map((b: any) => b.recipient_name_id).filter(Boolean))];
-  let names: Record<string, string> = {};
-  if (nameIds.length) {
-    const { data: nameData } = await supabase
-      .from("names")
-      .select("id, name")
-      .in("id", nameIds);
-    names = Object.fromEntries((nameData || []).map((n: any) => [n.id, n.name]));
-  }
-
-  const bankIds = [...new Set((batches || []).map((b: any) => b.bank_id).filter(Boolean))];
-  let banks: Record<string, any> = {};
-  if (bankIds.length) {
-    const { data: bankData } = await supabase
-      .from("banks")
-      .select("*")
-      .in("id", bankIds);
-    banks = Object.fromEntries((bankData || []).map((b: any) => [b.id, mapRow<Bank>(b)]));
-  }
-
-  const companyIdsInBatches = [...new Set((batches || []).filter((b: any) => b.voucher_company_id).map((b: any) => b.voucher_company_id))];
-  let batchCompanies: Record<string, any> = {};
-  if (companyIdsInBatches.length) {
-    const { data: compData } = await supabase
-      .from("voucher_companies")
-      .select("*")
-      .in("id", companyIdsInBatches);
-    batchCompanies = Object.fromEntries((compData || []).map((c: any) => [c.id, mapRow<VoucherCompany>(c)]));
-  }
-
-  return (batches || []).map((batch: any) => {
-    const b = mapRow<Batch>(batch);
-    const batchVouchers = (vouchers || []).filter((v: any) => v.batch_id === batch.id);
+  const vouchersByBatch = groupBy(vouchers, "batch_id");
+  return batches.map((batch: any) => {
+    const batchVouchers = vouchersByBatch[batch.id] || [];
     const idsInBatch = [...new Set(batchVouchers.map((v: any) => v.voucher_company_id).filter(Boolean))];
     return {
-      ...b,
-      voucherCompany: batch.voucher_company_id ? (batchCompanies[batch.voucher_company_id] || null) : null,
-      recipient: batch.recipient_name_id ? { id: batch.recipient_name_id, name: names[batch.recipient_name_id] } as Name : null,
+      ...mapRow<Batch>(batch),
+      voucherCompany: batch.voucher_company_id ? (companies[batch.voucher_company_id] || null) : null,
+      recipient: batch.recipient_name_id ? { id: batch.recipient_name_id, name: names[batch.recipient_name_id]?.name } as Name : null,
       bank: batch.bank_id ? (banks[batch.bank_id] || null) : null,
-      companyNames: idsInBatch.map((id: string) => companies[id]).filter(Boolean),
-      vouchers: batchVouchers.map(mapRow),
+      companyNames: idsInBatch.map((id: string) => companies[id]?.name).filter(Boolean),
+      vouchers: batchVouchers.map((v: any) => mapRow<Voucher>(v)),
     } as BatchWithRelations;
   });
 }
 
 async function fetchDeposits(): Promise<DepositWithRelations[]> {
-  const { data: deposits, error } = await supabase
-    .from("deposits")
-    .select("*")
-    .eq("account_id", accountId())
-    .order("date_deposited", { ascending: false });
-  if (error) throw new Error(error.message);
+  const aid = accountId();
+  const [deposits, vouchers, companies, names, banks] = await Promise.all([
+    fetchAll(() => supabase.from("deposits").select("*").eq("account_id", aid).order("date_deposited", { ascending: false }).order("id")),
+    fetchAll(() => supabase.from("vouchers").select("*").eq("account_id", aid).not("deposit_id", "is", null).order("id")),
+    lookup<VoucherCompany>("voucher_companies"),
+    lookup<Name>("names", "id, name"),
+    lookup<Bank>("banks"),
+  ]);
 
-  const { data: vouchers } = await supabase
-    .from("vouchers")
-    .select("*")
-    .eq("account_id", accountId());
-
-  const bankIds = [...new Set((deposits || []).map((d: any) => d.bank_id).filter(Boolean))];
-  let banks: Record<string, any> = {};
-  if (bankIds.length) {
-    const { data: bankData } = await supabase
-      .from("banks")
-      .select("*")
-      .in("id", bankIds);
-    banks = Object.fromEntries((bankData || []).map((b: any) => [b.id, mapRow<Bank>(b)]));
-  }
-
-  const companyIds = [...new Set((deposits || []).map((d: any) => d.voucher_company_id).filter(Boolean))];
-  let companies: Record<string, any> = {};
-  if (companyIds.length) {
-    const { data: compData } = await supabase
-      .from("voucher_companies")
-      .select("*")
-      .in("id", companyIds);
-    companies = Object.fromEntries((compData || []).map((c: any) => [c.id, mapRow<VoucherCompany>(c)]));
-  }
-
-  const nameIds = [...new Set((deposits || []).map((d: any) => d.recipient_name_id).filter(Boolean))];
-  let names: Record<string, any> = {};
-  if (nameIds.length) {
-    const { data: nameData } = await supabase
-      .from("names")
-      .select("id, name")
-      .in("id", nameIds);
-    names = Object.fromEntries((nameData || []).map((n: any) => [n.id, mapRow<Name>(n)]));
-  }
-
-  return (deposits || []).map((deposit: any) => {
-    const d = mapRow<Deposit>(deposit);
-    return {
-      ...d,
-      bank: banks[deposit.bank_id],
-      voucherCompany: deposit.voucher_company_id ? (companies[deposit.voucher_company_id] || null) : null,
-      recipient: deposit.recipient_name_id ? (names[deposit.recipient_name_id] || null) : null,
-      vouchers: (vouchers || []).filter((v: any) => v.deposit_id === deposit.id).map(mapRow),
-    } as DepositWithRelations;
-  });
+  const vouchersByDeposit = groupBy(vouchers, "deposit_id");
+  return deposits.map((deposit: any) => ({
+    ...mapRow<Deposit>(deposit),
+    bank: banks[deposit.bank_id],
+    voucherCompany: deposit.voucher_company_id ? (companies[deposit.voucher_company_id] || null) : null,
+    recipient: deposit.recipient_name_id ? (names[deposit.recipient_name_id] || null) : null,
+    vouchers: (vouchersByDeposit[deposit.id] || []).map((v: any) => mapRow<Voucher>(v)),
+  }) as DepositWithRelations);
 }
 
+function groupBy(rows: any[], key: string): Record<string, any[]> {
+  const out: Record<string, any[]> = {};
+  for (const row of rows) {
+    const k = row[key];
+    if (k) (out[k] ||= []).push(row);
+  }
+  return out;
+}
+
+// public.users only lets people read their own row, so the member list comes
+// from a database function that checks the caller belongs to the account.
 async function fetchUsers(): Promise<any[]> {
-  const { data: accountUsers, error } = await supabase
-    .from("account_users")
-    .select("user_id, role")
-    .eq("account_id", accountId());
-  if (error) throw new Error(error.message);
-
-  const userIds = (accountUsers || []).map((au: any) => au.user_id);
-  if (!userIds.length) return [];
-
-  const { data: users, error: usersErr } = await supabase
-    .from("users")
-    .select("*")
-    .in("id", userIds.map(String));
-  if (usersErr) throw new Error(usersErr.message);
-
-  const roleMap = Object.fromEntries((accountUsers || []).map((au: any) => [String(au.user_id), au.role]));
-  return (users || []).map((u: any) => {
-    const mapped = mapRow<any>(u);
-    mapped.role = roleMap[u.id] || u.role || "user";
-    return mapped;
-  });
+  const rows = await rpc<any[]>("account_members", { p_account_id: accountId() });
+  return (rows || []).map((r) => mapRow<any>(r));
 }
 
 async function fetchDashboardStats(): Promise<DashboardStats> {
-  const { data: vouchers, error } = await supabase
-    .from("vouchers")
-    .select("*")
-    .eq("account_id", accountId());
-  if (error) throw new Error(error.message);
+  const [vouchers, batches, companies, names] = await Promise.all([
+    fetchAccountRows("vouchers"),
+    fetchAccountRows("batches"),
+    fetchAccountRows("voucher_companies"),
+    fetchAccountRows("names"),
+  ]);
 
-  const { data: batches, error: batchesErr } = await supabase
-    .from("batches")
-    .select("*")
-    .eq("account_id", accountId());
-  if (batchesErr) throw new Error(batchesErr.message);
-
-  const { data: companies, error: compErr } = await supabase
-    .from("voucher_companies")
-    .select("*")
-    .eq("account_id", accountId());
-  if (compErr) throw new Error(compErr.message);
-
-  const { data: names } = await supabase
-    .from("names")
-    .select("*")
-    .eq("account_id", accountId());
-
-  const active = (vouchers || []).filter((v: any) => v.status !== "cancelled");
+  const active = vouchers.filter((v: any) => v.status !== "cancelled");
 
   const bucket = (rows: any[]): StatsBucket => ({
     count: rows.length,
@@ -384,8 +261,9 @@ async function fetchDashboardStats(): Promise<DashboardStats> {
     return { month: key, ...bucket(active.filter((v: any) => String(v.date_received).slice(0, 7) === key)) };
   });
 
-  const companyMap = Object.fromEntries((companies || []).map((c: any) => [c.id, c]));
-  const nameMap = Object.fromEntries((names || []).map((n: any) => [n.id, n]));
+  const companyMap = Object.fromEntries(companies.map((c: any) => [c.id, c]));
+  const nameMap = Object.fromEntries(names.map((n: any) => [n.id, n]));
+  const vouchersByBatch = groupBy(vouchers, "batch_id");
 
   const recentVouchers = [...active]
     .sort((a: any, b: any) => String(b.date_received).localeCompare(String(a.date_received)))
@@ -397,17 +275,17 @@ async function fetchDashboardStats(): Promise<DashboardStats> {
       reference: undefined,
     } as VoucherWithRelations));
 
-  const pendingBatches = (batches || [])
+  const pendingBatches = batches
     .filter((b: any) => b.status === "pending")
     .map((b: any) => {
-      const batchVouchers = (vouchers || []).filter((v: any) => v.batch_id === b.id);
+      const batchVouchers = vouchersByBatch[b.id] || [];
       const idsInBatch = [...new Set(batchVouchers.map((v: any) => v.voucher_company_id).filter(Boolean))];
       return {
         ...mapRow<Batch>(b),
         voucherCompany: b.voucher_company_id && companyMap[b.voucher_company_id] ? mapRow<VoucherCompany>(companyMap[b.voucher_company_id]) : null,
         recipient: b.recipient_name_id && nameMap[b.recipient_name_id] ? { id: b.recipient_name_id, name: nameMap[b.recipient_name_id].name } as Name : null,
         companyNames: idsInBatch.map((id: string) => companyMap[id]?.name).filter(Boolean),
-        vouchers: batchVouchers.map(mapRow),
+        vouchers: batchVouchers.map((v: any) => mapRow<Voucher>(v)),
       } as BatchWithRelations;
     });
 
@@ -427,42 +305,26 @@ async function fetchDashboardStats(): Promise<DashboardStats> {
 }
 
 async function fetchNextBatchReference(): Promise<{ reference: string }> {
-  const { data, error } = await supabase
-    .from("batches")
-    .select("reference")
-    .eq("account_id", accountId());
-  if (error) throw new Error(error.message);
-  const last = Math.max(100, ...(data || []).map((b: any) => Number(b.reference.replace(/\D/g, "")) || 0));
+  const rows = await fetchAccountRows("batches", "id, reference");
+  const last = Math.max(100, ...rows.map((b: any) => Number(String(b.reference).replace(/\D/g, "")) || 0));
   return { reference: `B-${last + 1}` };
 }
 
 async function fetchGroupedVouchers(groupKey: "company" | "recipient", status: string): Promise<any[]> {
-  let q = supabase
-    .from("vouchers")
-    .select("*")
-    .eq("account_id", accountId())
-    .eq("status", status);
-
-  if (status === "unposted") q = q.is("batch_id", null);
-
-  const { data: vouchers, error } = await q;
-  if (error) throw new Error(error.message);
-
-  const { data: batches } = await supabase
-    .from("batches")
-    .select("id, recipient_name_id")
-    .eq("account_id", accountId());
+  const aid = accountId();
+  const [vouchers, batches] = await Promise.all([
+    fetchAll(() => {
+      let q = supabase.from("vouchers").select("*").eq("account_id", aid).eq("status", status);
+      if (status === "unposted") q = q.is("batch_id", null);
+      return q.order("id");
+    }),
+    fetchAccountRows("batches", "id, recipient_name_id"),
+  ]);
 
   if (groupKey === "company") {
-    const companyIds = [...new Set((vouchers || []).map((v: any) => v.voucher_company_id).filter(Boolean))];
-    const { data: companies } = await supabase
-      .from("voucher_companies")
-      .select("*")
-      .in("id", companyIds);
-    const companyMap = Object.fromEntries((companies || []).map((c: any) => [c.id, mapRow<VoucherCompany>(c)]));
-
+    const companyMap = await lookup<VoucherCompany>("voucher_companies");
     const grouped = new Map<string, { company: VoucherCompany; voucherCount: number; totalQuantity: number; totalAmount: number }>();
-    for (const v of (vouchers || [])) {
+    for (const v of vouchers) {
       const id = v.voucher_company_id;
       if (!id) continue;
       const bucket = grouped.get(id) || { company: companyMap[id], voucherCount: 0, totalQuantity: 0, totalAmount: 0 };
@@ -473,20 +335,10 @@ async function fetchGroupedVouchers(groupKey: "company" | "recipient", status: s
     }
     return [...grouped.values()];
   } else {
-    const batchMap = Object.fromEntries((batches || []).map((b: any) => [b.id, b.recipient_name_id]));
-    const recipientIds = [...new Set(
-      (vouchers || [])
-        .map((v: any) => batchMap[v.batch_id])
-        .filter(Boolean)
-    )];
-    const { data: names } = await supabase
-      .from("names")
-      .select("*")
-      .in("id", recipientIds);
-    const nameMap = Object.fromEntries((names || []).map((n: any) => [n.id, mapRow<Name>(n)]));
-
+    const batchMap = Object.fromEntries(batches.map((b: any) => [b.id, b.recipient_name_id]));
+    const nameMap = await lookup<Name>("names");
     const grouped = new Map<string, { recipient: Name; voucherCount: number; totalQuantity: number; totalAmount: number }>();
-    for (const v of (vouchers || [])) {
+    for (const v of vouchers) {
       const recipientId = batchMap[v.batch_id];
       if (!recipientId) continue;
       const bucket = grouped.get(recipientId) || { recipient: nameMap[recipientId], voucherCount: 0, totalQuantity: 0, totalAmount: 0 };
@@ -552,6 +404,29 @@ function snakeCase(obj: Record<string, any>): Record<string, any> {
   return out;
 }
 
+// Batch fields the database accepts; amount_sent and status are set there.
+function batchFields(batchData: Record<string, any>): Record<string, any> {
+  const { amountSent, status, voucherIds, ...fields } = batchData;
+  return snakeCase(fields);
+}
+
+async function batchVoucherIds(batchId: string): Promise<string[]> {
+  const aid = accountId();
+  const rows = await fetchAll(() =>
+    supabase.from("vouchers").select("id").eq("account_id", aid).eq("batch_id", batchId).order("id"),
+  );
+  return rows.map((r: any) => r.id);
+}
+
+function saveBatch(batchId: string, batchData: Record<string, any>, voucherIds: string[]) {
+  return rpc<string>("save_batch", {
+    p_account_id: accountId(),
+    p_batch_id: batchId,
+    p_batch: batchFields(batchData),
+    p_voucher_ids: voucherIds,
+  });
+}
+
 async function handlePost(path: string, body: any): Promise<Response> {
   const cleanPath = path.replace(/\/$/, "") || "/";
   const aid = accountId();
@@ -560,76 +435,39 @@ async function handlePost(path: string, body: any): Promise<Response> {
   // --- Batches ---
   if (cleanPath === "/api/batches") {
     const { voucherIds = [], ...batchData } = data;
-    const insert: Record<string, any> = {
-      ...snakeCase(batchData),
-      account_id: aid,
-      status: batchData.status || "pending",
-      date_sent: batchData.dateSent || new Date().toISOString(),
-      reference: batchData.reference || (await fetchNextBatchReference()).reference,
-    };
-    delete insert.voucher_ids;
-    const { data: batch, error } = await supabase.from("batches").insert(insert).select("*").single();
-    if (error) throw new Error(error.message);
-
-    if (voucherIds.length) {
-      const { error: vErr } = await supabase
-        .from("vouchers")
-        .update({ batch_id: batch.id, status: "posted" })
-        .in("id", voucherIds)
-        .eq("account_id", aid);
-      if (vErr) throw new Error(vErr.message);
-    }
-
-    return jsonResponse(await fetchBatches().then((bs) => bs.find((b) => b.id === batch.id)), 201);
+    const id = await rpc<string>("save_batch", {
+      p_account_id: aid,
+      p_batch_id: null,
+      p_batch: batchFields(batchData),
+      p_voucher_ids: voucherIds,
+    });
+    return jsonResponse({ id }, 201);
   }
 
   // --- Deposits ---
   if (cleanPath === "/api/deposits") {
     const { voucherIds = [], ...depositData } = data;
-    const insert: Record<string, any> = {
-      ...snakeCase(depositData),
-      account_id: aid,
-      date_deposited: depositData.dateDeposited || new Date().toISOString(),
-    };
-    delete insert.voucher_ids;
-    const { data: deposit, error } = await supabase.from("deposits").insert(insert).select("*").single();
-    if (error) throw new Error(error.message);
-
-    if (voucherIds.length) {
-      const { error: vErr } = await supabase
-        .from("vouchers")
-        .update({ deposit_id: deposit.id, status: "deposited" })
-        .in("id", voucherIds)
-        .eq("account_id", aid);
-      if (vErr) throw new Error(vErr.message);
-    }
-
-    return jsonResponse(await fetchDeposits().then((ds) => ds.find((d) => d.id === deposit.id)), 201);
+    const id = await rpc<string>("create_deposit", {
+      p_account_id: aid,
+      p_deposit: snakeCase(depositData),
+      p_voucher_ids: voucherIds,
+    });
+    return jsonResponse({ id }, 201);
   }
 
   // --- Add vouchers to batch ---
   const batchVouchersMatch = cleanPath.match(/^\/api\/batches\/([^/]+)\/vouchers$/);
   if (batchVouchersMatch) {
     const batchId = batchVouchersMatch[1];
-    const { error } = await supabase
-      .from("vouchers")
-      .update({ batch_id: batchId, status: "posted" })
-      .in("id", data.voucherIds || [])
-      .eq("account_id", aid);
-    if (error) throw new Error(error.message);
+    const current = await batchVoucherIds(batchId);
+    await saveBatch(batchId, {}, [...current, ...(data.voucherIds || [])]);
     return jsonResponse({ ok: true });
   }
 
   // --- Add vouchers to deposit ---
   const depositVouchersMatch = cleanPath.match(/^\/api\/deposits\/([^/]+)\/vouchers$/);
   if (depositVouchersMatch) {
-    const depositId = depositVouchersMatch[1];
-    const { error } = await supabase
-      .from("vouchers")
-      .update({ deposit_id: depositId, status: "deposited" })
-      .in("id", data.voucherIds || [])
-      .eq("account_id", aid);
-    if (error) throw new Error(error.message);
+    await rpc("add_deposit_vouchers", { p_deposit_id: depositVouchersMatch[1], p_voucher_ids: data.voucherIds || [] });
     return jsonResponse({ ok: true });
   }
 
@@ -678,77 +516,35 @@ async function handlePatch(path: string, body: any): Promise<Response> {
   // --- Bulk edit vouchers ---
   if (cleanPath === "/api/vouchers/bulk") {
     const { ids = [], changes = {} } = data;
-    const snakeChanges = snakeCase(changes);
-    const { data: result, error } = await supabase
-      .from("vouchers")
-      .update(snakeChanges)
-      .in("id", ids)
-      .eq("account_id", aid)
-      .neq("status", "deposited");
-    if (error) throw new Error(error.message);
-    return jsonResponse({ updated: ids.length });
+    return jsonResponse(
+      await rpc("bulk_update_vouchers", { p_account_id: aid, p_ids: ids, p_changes: snakeCase(changes) }),
+    );
   }
 
   // --- User role update ---
   const roleMatch = cleanPath.match(/^\/api\/users\/([^/]+)\/role$/);
   if (roleMatch) {
-    const userId = roleMatch[1];
-    const { data: accountUser, error: findErr } = await supabase
-      .from("account_users")
-      .select("id")
-      .eq("account_id", aid)
-      .eq("user_id", userId)
-      .maybeSingle();
-    if (findErr) throw new Error(findErr.message);
-    if (!accountUser) return notFound();
-    const { error } = await supabase
-      .from("account_users")
-      .update({ role: data.role })
-      .eq("id", accountUser.id);
-    if (error) throw new Error(error.message);
+    await rpc("set_member_role", { p_account_id: aid, p_user_id: roleMatch[1], p_role: data.role });
     return jsonResponse({ ok: true });
   }
 
   // --- Deposit update (with adjustment fields) ---
   const depositMatch = cleanPath.match(/^\/api\/deposits\/([^/]+)$/);
   if (depositMatch) {
-    const id = depositMatch[1];
-    const update = snakeCase(data);
-    const { data: row, error } = await supabase
-      .from("deposits")
-      .update(update)
-      .eq("id", id)
-      .eq("account_id", aid)
-      .select("*")
-      .single();
-    if (error) throw new Error(error.message);
-    return jsonResponse(mapRow(row));
+    await rpc("update_deposit", { p_deposit_id: depositMatch[1], p_deposit: snakeCase(data) });
+    return jsonResponse({ ok: true });
   }
 
-  // --- Batch update (status change updates member vouchers) ---
+  // --- Batch update: a status change on its own, or details plus the voucher list ---
   const batchMatch = cleanPath.match(/^\/api\/batches\/([^/]+)$/);
   if (batchMatch) {
     const id = batchMatch[1];
-    const update = snakeCase(data);
-    const { data: row, error } = await supabase
-      .from("batches")
-      .update(update)
-      .eq("id", id)
-      .eq("account_id", aid)
-      .select("*")
-      .single();
-    if (error) throw new Error(error.message);
-
-    if (data.status) {
-      const newVoucherStatus = data.status === "cancelled" ? "unposted" : "posted";
-      await supabase
-        .from("vouchers")
-        .update({ status: newVoucherStatus })
-        .eq("batch_id", id)
-        .eq("account_id", aid);
+    const { voucherIds, status, ...batchData } = data;
+    if (Object.keys(batchData).length > 0 || voucherIds) {
+      await saveBatch(id, batchData, voucherIds ?? (await batchVoucherIds(id)));
     }
-
-    return jsonResponse(mapRow(row));
+    if (status) await rpc("set_batch_status", { p_batch_id: id, p_status: status });
+    return jsonResponse({ ok: true });
   }
 
   // --- Settings update ---
@@ -802,51 +598,28 @@ async function handleDelete(path: string): Promise<Response> {
 
   // --- Remove voucher from batch ---
   if (parts.includes("batches") && parts.includes("vouchers") && parts.length >= 5) {
+    const batchId = parts[3];
     const voucherId = parts.at(-1)!;
-    const { error } = await supabase
-      .from("vouchers")
-      .update({ batch_id: null, status: "unposted" })
-      .eq("id", voucherId)
-      .eq("account_id", aid);
-    if (error) throw new Error(error.message);
-    return jsonResponse({ ok: true, parentId: parts[3] });
+    const current = await batchVoucherIds(batchId);
+    await saveBatch(batchId, {}, current.filter((id) => id !== voucherId));
+    return jsonResponse({ ok: true, parentId: batchId });
   }
 
   // --- Remove voucher from deposit ---
   if (parts.includes("deposits") && parts.includes("vouchers") && parts.length >= 5) {
-    const voucherId = parts.at(-1)!;
-    const { error } = await supabase
-      .from("vouchers")
-      .update({ deposit_id: null, status: "posted" })
-      .eq("id", voucherId)
-      .eq("account_id", aid);
-    if (error) throw new Error(error.message);
+    await rpc("remove_deposit_voucher", { p_deposit_id: parts[3], p_voucher_id: parts.at(-1)! });
     return jsonResponse({ ok: true, parentId: parts[3] });
   }
 
-  // --- Delete batch (unlink vouchers) ---
+  // --- Delete batch (its vouchers go back to unposted) ---
   if (parts[2] === "batches" && parts.length === 4) {
-    const id = parts[3];
-    await supabase
-      .from("vouchers")
-      .update({ batch_id: null, status: "unposted" })
-      .eq("batch_id", id)
-      .eq("account_id", aid);
-    const { error } = await supabase.from("batches").delete().eq("id", id).eq("account_id", aid);
-    if (error) throw new Error(error.message);
+    await rpc("delete_batch", { p_batch_id: parts[3] });
     return jsonResponse({ ok: true });
   }
 
-  // --- Delete deposit (unlink vouchers) ---
+  // --- Delete deposit (its vouchers go back to posted) ---
   if (parts[2] === "deposits" && parts.length === 4) {
-    const id = parts[3];
-    await supabase
-      .from("vouchers")
-      .update({ deposit_id: null, status: "posted" })
-      .eq("deposit_id", id)
-      .eq("account_id", aid);
-    const { error } = await supabase.from("deposits").delete().eq("id", id).eq("account_id", aid);
-    if (error) throw new Error(error.message);
+    await rpc("delete_deposit", { p_deposit_id: parts[3] });
     return jsonResponse({ ok: true });
   }
 
@@ -888,7 +661,8 @@ export async function supabaseApiRequest(method: string, input: string, body?: u
   const path = url.pathname;
 
   try {
-    if (method === "GET") return await handleGet(path);
+    // Keep the query string for reads: filters like ?batchId= live there.
+    if (method === "GET") return await handleGet(path + url.search);
     if (method === "POST") return await handlePost(path, body);
     if (method === "PATCH") return await handlePatch(path, body);
     if (method === "DELETE") return await handleDelete(path);

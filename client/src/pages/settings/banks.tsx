@@ -37,6 +37,7 @@ import { DataTable, Column } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import type { Bank } from "@shared/schema";
 
 const bankFormSchema = z.object({
@@ -48,6 +49,9 @@ const bankFormSchema = z.object({
 type BankFormValues = z.infer<typeof bankFormSchema>;
 
 export default function Banks() {
+  // Bank details print on remittances, so only owners and admins change them.
+  const { currentAccount } = useAuth();
+  const canManage = currentAccount?.role === "owner" || currentAccount?.role === "admin";
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editBank, setEditBank] = useState<Bank | null>(null);
   const [deleteBank, setDeleteBank] = useState<Bank | null>(null);
@@ -147,9 +151,9 @@ export default function Banks() {
     <div className="space-y-6">
       <PageHeader
         title="Banks"
-        description="Manage destination bank accounts for deposits"
+        description={canManage ? "Manage destination bank accounts for deposits" : "Only owners and admins can change bank accounts"}
       >
-        <Button onClick={() => setIsDialogOpen(true)} data-testid="button-add-bank">
+        <Button onClick={() => setIsDialogOpen(true)} disabled={!canManage} data-testid="button-add-bank">
           <Plus className="h-4 w-4 mr-2" />
           Add Bank
         </Button>
@@ -163,7 +167,7 @@ export default function Banks() {
               title="No banks yet"
               description="Add bank accounts where vouchers are deposited."
             >
-              <Button onClick={() => setIsDialogOpen(true)} data-testid="button-add-first-bank">
+              <Button onClick={() => setIsDialogOpen(true)} disabled={!canManage} data-testid="button-add-first-bank">
                 <Plus className="h-4 w-4 mr-2" />
                 Add First Bank
               </Button>
@@ -182,6 +186,7 @@ export default function Banks() {
                     variant="ghost"
                     size="icon"
                     onClick={() => handleEdit(bank)}
+                    disabled={!canManage}
                     data-testid={`button-edit-${bank.id}`}
                   >
                     <Pencil className="h-4 w-4" />
@@ -190,6 +195,7 @@ export default function Banks() {
                     variant="ghost"
                     size="icon"
                     onClick={() => setDeleteBank(bank)}
+                    disabled={!canManage}
                     data-testid={`button-delete-${bank.id}`}
                   >
                     <Trash2 className="h-4 w-4 text-destructive" />
