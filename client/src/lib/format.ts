@@ -7,7 +7,10 @@ export function formatCurrency(amount: number | string): string {
 }
 
 export function formatDate(date: Date | string): string {
-  const d = typeof date === "string" ? new Date(date) : date;
+  const dateOnly = typeof date === "string" ? date.match(/^(\d{4})-(\d{2})-(\d{2})$/) : null;
+  const d = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : typeof date === "string" ? new Date(date) : date;
   return new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
     month: "short",

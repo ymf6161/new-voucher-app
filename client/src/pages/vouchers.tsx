@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Receipt, Grid3x3 as Grid3X3, LayoutList, Download } from "lucide-react";
+import { Plus, Pencil, Trash2, Receipt, Grid3x3 as Grid3X3, LayoutList, Download, FileUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -27,6 +27,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { VoucherForm } from "@/components/voucher-form";
 import { BatchVoucherEntry } from "@/components/batch-voucher-entry";
+import { VoucherImportDialog } from "@/components/voucher-import-dialog";
 import { BulkEditVouchersDialog, isBulkEditable } from "@/components/bulk-edit-vouchers-dialog";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -41,6 +42,7 @@ function voucherTotal(voucher: Voucher): number {
 export default function Vouchers() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [editVoucher, setEditVoucher] = useState<VoucherWithRelations | null>(null);
   const [deleteVoucher, setDeleteVoucher] = useState<Voucher | null>(null);
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
@@ -221,6 +223,10 @@ export default function Vouchers() {
           description="Track and manage all received vouchers"
         >
           <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setIsImportDialogOpen(true)} data-testid="button-import-vouchers">
+              <FileUp className="h-4 w-4 mr-2" />
+              Import CSV
+            </Button>
             <Button
               variant="outline"
               onClick={() => {
@@ -296,6 +302,15 @@ export default function Vouchers() {
           </DialogContent>
         </Dialog>
 
+        <VoucherImportDialog
+          open={isImportDialogOpen}
+          onOpenChange={setIsImportDialogOpen}
+          companies={companies}
+          names={names}
+          references={references}
+          onImported={() => setIsImportDialogOpen(false)}
+        />
+
         <Dialog open={isBatchDialogOpen} onOpenChange={setIsBatchDialogOpen}>
           <DialogContent className="max-w-[95vw] max-h-[95vh] overflow-hidden flex flex-col">
             <DialogHeader>
@@ -328,6 +343,10 @@ export default function Vouchers() {
         description="Track and manage all received vouchers"
       >
         <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="outline" onClick={() => setIsImportDialogOpen(true)} data-testid="button-import-vouchers">
+            <FileUp className="h-4 w-4 mr-2" />
+            Import CSV
+          </Button>
           <Button
             variant="outline"
             onClick={() => {
@@ -470,6 +489,15 @@ export default function Vouchers() {
           />
         </DialogContent>
       </Dialog>
+
+      <VoucherImportDialog
+        open={isImportDialogOpen}
+        onOpenChange={setIsImportDialogOpen}
+        companies={companies}
+        names={names}
+        references={references}
+        onImported={() => setIsImportDialogOpen(false)}
+      />
 
       <Dialog open={!!editVoucher} onOpenChange={(open) => !open && setEditVoucher(null)}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">

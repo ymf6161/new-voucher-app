@@ -66,7 +66,7 @@ export function formatBatchesForExport(batches: any[]): Record<string, unknown>[
   return batches.map(b => {
     return {
       "Reference": b.reference,
-      "Date Sent": new Date(b.dateSent).toLocaleDateString("en-GB"),
+      "Batch Date": new Date(`${b.batchDate || b.dateSent}`).toLocaleDateString("en-GB"),
       "Sent To": b.recipient?.name || b.voucherCompany?.name || "",
       "Companies": (b.companyNames || [b.voucherCompany?.name].filter(Boolean)).join(", "),
       "Quantity": (b.vouchers || []).reduce((sum: number, v: any) => sum + (v.quantity || 0), 0),
