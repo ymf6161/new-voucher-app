@@ -55,6 +55,7 @@ interface DataTableProps<T extends { id: string }> {
   emptyMessage?: string;
   isLoading?: boolean;
   actions?: (item: T) => React.ReactNode;
+  stickyActions?: boolean;
 }
 
 function rawValue<T>(item: T, column: Column<T>): CellValue {
@@ -128,6 +129,7 @@ export function DataTable<T extends { id: string }>({
   emptyMessage = "No data found",
   isLoading = false,
   actions,
+  stickyActions = false,
 }: DataTableProps<T>) {
   const [initial] = useState(() => readUrlState(urlStateKey));
   const [searchQuery, setSearchQuery] = useState<string>(initial.q);
@@ -291,7 +293,7 @@ export function DataTable<T extends { id: string }>({
                     {column.header}
                   </TableHead>
                 ))}
-                {actions && <TableHead className="w-24">Actions</TableHead>}
+                {actions && <TableHead className={cn("w-24", stickyActions && "sticky right-0 z-20 bg-card")}>Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -303,7 +305,7 @@ export function DataTable<T extends { id: string }>({
                       <div className="h-4 bg-muted rounded animate-pulse" style={{ width: `${60 + ((i * 17) % 40)}%` }} />
                     </TableCell>
                   ))}
-                  {actions && <TableCell><div className="h-8 w-20 bg-muted rounded animate-pulse" /></TableCell>}
+                  {actions && <TableCell className={cn(stickyActions && "sticky right-0 z-10 bg-card")}><div className="h-8 w-20 bg-muted rounded animate-pulse" /></TableCell>}
                 </TableRow>
               ))}
             </TableBody>
@@ -371,7 +373,7 @@ export function DataTable<T extends { id: string }>({
                   </TableHead>
                 );
               })}
-              {actions && <TableHead className="w-24 text-right">Actions</TableHead>}
+              {actions && <TableHead className={cn("w-24 text-right", stickyActions && "sticky right-0 z-20 bg-card")}>Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -413,7 +415,7 @@ export function DataTable<T extends { id: string }>({
                     </TableCell>
                   ))}
                   {actions && (
-                    <TableCell className="text-right">
+                    <TableCell className={cn("text-right", stickyActions && "sticky right-0 z-10 bg-card")}>
                       {actions(item)}
                     </TableCell>
                   )}

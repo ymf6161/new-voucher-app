@@ -427,6 +427,7 @@ export default function Vouchers() {
             searchFields={["notes", "accountNumber"]}
             filters={filters}
             urlStateKey="v"
+            stickyActions
             summary={(rows) => (
               <span data-testid="text-filtered-totals">
                 Qty {rows.reduce((sum, v) => sum + (v.quantity || 0), 0)} · Total{" "}
