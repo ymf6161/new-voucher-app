@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Receipt, Grid3x3 as Grid3X3, LayoutList, Download, FileUp } from "lucide-react";
+import { Plus, Pencil, Trash2, Receipt, Grid3x3 as Grid3X3, LayoutList, Download, FileUp, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -43,6 +43,7 @@ export default function Vouchers() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [viewVoucher, setViewVoucher] = useState<VoucherWithRelations | null>(null);
   const [editVoucher, setEditVoucher] = useState<VoucherWithRelations | null>(null);
   const [deleteVoucher, setDeleteVoucher] = useState<Voucher | null>(null);
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
@@ -452,6 +453,16 @@ export default function Vouchers() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  onClick={() => setViewVoucher(voucher)}
+                  aria-label={`View voucher ${voucher.voucherNumber || voucher.id}`}
+                  title="View voucher"
+                  data-testid={`button-view-${voucher.id}`}
+                >
+                  <Eye className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => setEditVoucher(voucher)}
                   disabled={voucher.status === "posted" || voucher.status === "deposited"}
                   data-testid={`button-edit-${voucher.id}`}
@@ -499,6 +510,36 @@ export default function Vouchers() {
         references={references}
         onImported={() => setIsImportDialogOpen(false)}
       />
+
+      <Dialog open={!!viewVoucher} onOpenChange={(open) => !open && setViewVoucher(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Voucher details</DialogTitle>
+            <DialogDescription>
+              {viewVoucher?.voucherCompany?.name || "Voucher"} · {viewVoucher?.voucherNumber || viewVoucher?.type}
+            </DialogDescription>
+          </DialogHeader>
+          {viewVoucher && (
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
+              <div><p className="text-muted-foreground">Date received</p><p>{formatDate(viewVoucher.dateReceived)}</p></div>
+              <div><p className="text-muted-foreground">Status</p><StatusBadge status={viewVoucher.status} /></div>
+              <div><p className="text-muted-foreground">Received from</p><p>{viewVoucher.receivedFrom?.name || "-"}</p></div>
+              <div><p className="text-muted-foreground">Reference</p><p>{viewVoucher.reference?.reference || "-"}</p></div>
+              <div><p className="text-muted-foreground">Voucher company</p><p>{viewVoucher.voucherCompany?.name || "-"}</p></div>
+              <div><p className="text-muted-foreground">Type</p><p>{viewVoucher.type}</p></div>
+              <div><p className="text-muted-foreground">Account number</p><p>{viewVoucher.accountNumber || "-"}</p></div>
+              <div><p className="text-muted-foreground">Voucher number</p><p>{viewVoucher.voucherNumber || "-"}</p></div>
+              <div><p className="text-muted-foreground">Amount</p><p>{formatCurrency(viewVoucher.amount)}</p></div>
+              <div><p className="text-muted-foreground">Quantity</p><p>{viewVoucher.quantity}</p></div>
+              <div><p className="text-muted-foreground">Total</p><p>{formatCurrency(voucherTotal(viewVoucher))}</p></div>
+              <div className="col-span-2"><p className="text-muted-foreground">Notes</p><p className="whitespace-pre-wrap">{viewVoucher.notes || "-"}</p></div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewVoucher(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!editVoucher} onOpenChange={(open) => !open && setEditVoucher(null)}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
