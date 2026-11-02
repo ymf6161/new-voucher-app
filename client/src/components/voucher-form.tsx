@@ -32,6 +32,7 @@ import { Calendar as CalendarIcon } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { isVoucherFullyEditable } from "@/lib/voucher-rules";
 import { useToast } from "@/hooks/use-toast";
 import { AutoCompleteDropdown } from "@/components/auto-complete-dropdown";
 import type { VoucherWithRelations, VoucherCompany, Name, Reference } from "@shared/schema";
@@ -71,6 +72,9 @@ export function VoucherForm({
 }: VoucherFormProps) {
   const { toast } = useToast();
   const isEditing = !!voucher;
+  // Posted or banked vouchers: only who it came from, the reference and the
+  // notes can change. The database enforces the same rule.
+  const isLocked = isEditing && !isVoucherFullyEditable(voucher);
   const [localCompanies, setLocalCompanies] = useState<VoucherCompany[]>(companies);
   const [localNames, setLocalNames] = useState<Name[]>(names);
   const [localReferences, setLocalReferences] = useState<Reference[]>(references);
@@ -327,6 +331,13 @@ export function VoucherForm({
         voucherCompanyId: resolvedCompanyId,
       };
 
+      if (isLocked) {
+        return apiRequest("PATCH", `/api/vouchers/${voucher.id}`, {
+          receivedFromId: resolvedNameId,
+          referenceId: resolvedReferenceId,
+          notes: data.notes || null,
+        });
+      }
       if (isEditing) {
         return apiRequest("PATCH", `/api/vouchers/${voucher.id}`, payload);
       }
@@ -384,7 +395,13 @@ export function VoucherForm({
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        {isLocked && (
+          <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300" data-testid="text-voucher-locked">
+            This voucher is {voucher?.status === "deposited" ? "banked" : "posted"}. Only Received from, Reference and Notes can be changed.
+          </p>
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
+          <fieldset disabled={isLocked} className="contents">
           <FormField
             control={form.control}
             name="dateReceived"
@@ -434,7 +451,9 @@ export function VoucherForm({
               </FormItem>
             )}
           />
+          </fieldset>
 
+          <fieldset disabled={isLocked} className="contents">
           <FormField
             control={form.control}
             name="voucherCompanyId"
@@ -465,6 +484,7 @@ export function VoucherForm({
               </FormItem>
             )}
           />
+          </fieldset>
 
           <FormField
             control={form.control}
@@ -528,6 +548,7 @@ export function VoucherForm({
             )}
           />
 
+          <fieldset disabled={isLocked} className="contents">
           <FormField
             control={form.control}
             name="type"
@@ -572,7 +593,9 @@ export function VoucherForm({
               </FormItem>
             )}
           />
+          </fieldset>
 
+          <fieldset disabled={isLocked} className="contents">
           <FormField
             control={form.control}
             name="voucherNumber"
@@ -597,7 +620,9 @@ export function VoucherForm({
               </FormItem>
             )}
           />
+          </fieldset>
 
+          <fieldset disabled={isLocked} className="contents">
           <FormField
             control={form.control}
             name="amount"
@@ -624,7 +649,9 @@ export function VoucherForm({
               </FormItem>
             )}
           />
+          </fieldset>
 
+          <fieldset disabled={isLocked} className="contents">
           <FormField
             control={form.control}
             name="quantity"
@@ -651,6 +678,7 @@ export function VoucherForm({
               </FormItem>
             )}
           />
+          </fieldset>
 
           <div className="flex items-end">
             <div className="w-full p-3 bg-muted rounded-md">
@@ -663,6 +691,7 @@ export function VoucherForm({
         </div>
 
         {isEditing && (
+          <fieldset disabled={isLocked} className="contents">
           <FormField
             control={form.control}
             name="status"
@@ -679,12 +708,15 @@ export function VoucherForm({
                     <SelectItem value="unposted">Unposted</SelectItem>
                     <SelectItem value="cancelled">Cancelled</SelectItem>
                     <SelectItem value="completed">Completed</SelectItem>
+                    {isLocked && <SelectItem value="posted">Posted</SelectItem>}
+                    {isLocked && <SelectItem value="deposited">Banked</SelectItem>}
                   </SelectContent>
                 </Select>
                 <FormMessage />
               </FormItem>
             )}
           />
+          </fieldset>
         )}
 
         <FormField

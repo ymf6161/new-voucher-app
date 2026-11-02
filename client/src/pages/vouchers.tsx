@@ -28,7 +28,7 @@ import { EmptyState } from "@/components/empty-state";
 import { VoucherForm } from "@/components/voucher-form";
 import { BatchVoucherEntry } from "@/components/batch-voucher-entry";
 import { VoucherImportDialog } from "@/components/voucher-import-dialog";
-import { BulkEditVouchersDialog, isBulkEditable } from "@/components/bulk-edit-vouchers-dialog";
+import { BulkEditVouchersDialog } from "@/components/bulk-edit-vouchers-dialog";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { downloadCSV, formatVouchersForExport } from "@/lib/csv-export";
@@ -209,7 +209,8 @@ export default function Vouchers() {
   };
 
   const selectedVouchers = vouchers.filter((v) => selectedIds.includes(v.id));
-  const editableSelectedCount = selectedVouchers.filter(isBulkEditable).length;
+  // Any voucher can be bulk edited; posted or banked ones only take the always-editable fields.
+  const editableSelectedCount = selectedVouchers.length;
 
   const deletableSelectedIds = selectedIds.filter(id => {
     const voucher = vouchers.find(v => v.id === id);
@@ -464,7 +465,6 @@ export default function Vouchers() {
                   variant="ghost"
                   size="icon"
                   onClick={() => setEditVoucher(voucher)}
-                  disabled={voucher.status === "posted" || voucher.status === "deposited"}
                   data-testid={`button-edit-${voucher.id}`}
                 >
                   <Pencil className="h-4 w-4" />

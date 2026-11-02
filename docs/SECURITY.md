@@ -13,10 +13,10 @@ skipped by calling the Supabase API directly.
 | Signed-out visitors can read nothing | same |
 | Rows can't point at another account's company, name, reference, bank, batch or deposit | `vf_check_links` trigger |
 | Rows can't be moved to another account | `vf_check_links` trigger |
-| Posted or banked vouchers can't be edited or deleted; vouchers can't be posted or banked by a direct write | `vf_guard_voucher_writes` trigger |
+| Posted or banked vouchers can't be deleted, and only their Received from, Reference and Notes can be edited; vouchers can't be posted or banked by a direct write | `vf_guard_voucher_writes` trigger (`20261102160000_edit_details_of_posted_vouchers.sql`) |
 | Batches and deposits change only through functions that run as one transaction and re-check status rules | `save_batch`, `set_batch_status`, `delete_batch`, `create_deposit`, `update_deposit`, `add_deposit_vouchers`, `remove_deposit_voucher`, `delete_deposit` |
 | A batch's total is worked out from its vouchers | `save_batch` |
-| Bulk edit only touches unposted/cancelled/completed vouchers outside any batch or deposit, and only safe fields | `bulk_update_vouchers` |
+| Bulk edit changes Received from, Reference and Notes on any voucher; other fields only on vouchers not yet posted or banked | `bulk_update_vouchers` |
 | Bank details and business settings (printed on remittances) can be changed by owners and admins only | RLS on `banks`, `company_settings` |
 | Only owners change roles; an account always keeps an owner | `set_member_role`, `vf_keep_an_owner` trigger |
 
