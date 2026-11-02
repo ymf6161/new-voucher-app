@@ -14,8 +14,11 @@ export interface VoucherFact {
   quantity: number;
   value: number;
   received: string; // YYYY-MM-DD
-  posted: string | null; // batch date
+  posted: string | null; // batch date, once the batch is sent
   deposited: string | null; // deposit date
+  batchId: string | null;
+  batchDate: string | null; // batch date, whatever the batch's status
+  depositId: string | null;
   batchRef: string;
   sentTo: string;
   depositRef: string;
@@ -57,6 +60,9 @@ export function buildFacts(
       received: toDay(v.dateReceived) || "",
       posted: batch && batch.status === "sent" ? toDay(batch.batchDate || batch.dateSent) : null,
       deposited: deposit ? toDay(deposit.dateDeposited) : null,
+      batchId: batch?.id || null,
+      batchDate: batch ? toDay(batch.batchDate || batch.dateSent) : null,
+      depositId: deposit?.id || null,
       batchRef: batch?.reference || "",
       sentTo: batch ? batch.recipient?.name || batch.voucherCompany?.name || v.voucherCompany?.name || "" : "",
       depositRef: deposit?.reference || "",
