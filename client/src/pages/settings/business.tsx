@@ -20,6 +20,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import type { CompanySettings } from "@shared/schema";
 
 const businessFormSchema = z.object({
@@ -35,6 +36,9 @@ const businessFormSchema = z.object({
 type BusinessFormValues = z.infer<typeof businessFormSchema>;
 
 export default function BusinessSettings() {
+  // Business details print on remittances, so only owners and admins change them.
+  const { currentAccount } = useAuth();
+  const canManage = currentAccount?.role === "owner" || currentAccount?.role === "admin";
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -195,7 +199,7 @@ export default function BusinessSettings() {
     <div className="space-y-6">
       <PageHeader
         title="Business Settings"
-        description="Configure your organization details"
+        description={canManage ? "Configure your organization details" : "Only owners and admins can change these details"}
       />
 
       <Card>
@@ -238,7 +242,7 @@ export default function BusinessSettings() {
               <Button
                 variant="outline"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
+                disabled={isUploading || !canManage}
                 data-testid="button-upload-logo"
               >
                 <Upload className="h-4 w-4 mr-2" />
@@ -249,7 +253,7 @@ export default function BusinessSettings() {
                   variant="ghost"
                   size="sm"
                   onClick={handleRemoveLogo}
-                  disabled={updateLogoMutation.isPending}
+                  disabled={updateLogoMutation.isPending || !canManage}
                   className="text-destructive"
                   data-testid="button-remove-logo"
                 >
@@ -385,7 +389,7 @@ export default function BusinessSettings() {
               />
 
               <div className="flex justify-end pt-4">
-                <Button type="submit" disabled={mutation.isPending} data-testid="button-save">
+                <Button type="submit" disabled={mutation.isPending || !canManage} data-testid="button-save">
                   {mutation.isPending ? "Saving..." : "Save Settings"}
                 </Button>
               </div>

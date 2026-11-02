@@ -33,6 +33,17 @@ import {
   type ReportTable,
 } from "@/lib/report-data";
 import { STANDARD_REPORTS } from "@/lib/standard-reports";
+import {
+  buildTransactionsReport,
+  DEFAULT_DATE_BASIS,
+  DETAIL_HELP,
+  DETAIL_LABELS,
+  GROUP_BY_LABELS,
+  STATUS_LABELS,
+  type Detail,
+  type GroupBy,
+  type StatusFilter,
+} from "@/lib/transactions-report";
 import { exportReportCSV, exportReportExcel, exportReportPDF, formatCell } from "@/lib/report-export";
 import type { BatchWithRelations, CompanySettings, DepositWithRelations, VoucherWithRelations } from "@shared/schema";
 
@@ -50,17 +61,21 @@ export default function Reports() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Reports" description="Standard reports and a report builder. Every report exports to PDF, Excel and CSV." />
+      <PageHeader title="Reports" description="See every voucher from any angle. Every report exports to PDF, Excel and CSV." />
       {vouchersError ? (
         <Card><CardContent className="py-10 text-center text-destructive">Could not load report data: {(vouchersError as Error).message}</CardContent></Card>
       ) : isLoading ? (
         <Skeleton className="h-96 w-full" />
       ) : (
-        <Tabs defaultValue="standard">
+        <Tabs defaultValue="transactions">
           <TabsList>
+            <TabsTrigger value="transactions" data-testid="tab-transactions">Transactions</TabsTrigger>
             <TabsTrigger value="standard" data-testid="tab-standard">Standard reports</TabsTrigger>
             <TabsTrigger value="builder" data-testid="tab-builder">Report builder</TabsTrigger>
           </TabsList>
+          <TabsContent value="transactions" className="mt-4">
+            <TransactionsReport facts={facts} settings={settings} />
+          </TabsContent>
           <TabsContent value="standard" className="mt-4">
             <StandardReports facts={facts} batches={batches} deposits={deposits} settings={settings} today={today} />
           </TabsContent>
@@ -69,6 +84,112 @@ export default function Reports() {
           </TabsContent>
         </Tabs>
       )}
+    </div>
+  );
+}
+
+// ---------- transactions: every voucher, from any angle ----------
+
+function ChoiceRow<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+  testId,
+}: {
+  label: string;
+  options: Record<T, string>;
+  value: T;
+  onChange: (value: T) => void;
+  testId: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={label}>
+        {(Object.keys(options) as T[]).map((key) => (
+          <Button
+            key={key}
+            type="button"
+            size="sm"
+            variant={key === value ? "default" : "outline"}
+            role="radio"
+            aria-checked={key === value}
+            onClick={() => onChange(key)}
+            data-testid={`${testId}-${key}`}
+          >
+            {options[key]}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TransactionsReport({ facts, settings }: { facts: ReturnType<typeof buildFacts>; settings?: CompanySettings }) {
+  const [groupBy, setGroupBy] = useState<GroupBy>("receivedFrom");
+  const [detail, setDetail] = useState<Detail>("received");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [basis, setBasis] = useState<DateBasis>(DEFAULT_DATE_BASIS.receivedFrom);
+  const [preset, setPreset] = useState<PeriodPreset>("this-month");
+  const [custom, setCustom] = useState<Period>({ from: "", to: "" });
+  const [companies, setCompanies] = useState<string[]>([]);
+  const [includeCancelled, setIncludeCancelled] = useState(false);
+
+  const period = preset === "custom" ? custom : presetPeriod(preset);
+  const companyOptions = useMemo(() => Array.from(new Set(facts.map((f) => f.company))).sort(), [facts]);
+  const table = useMemo(
+    () => buildTransactionsReport(facts, { groupBy, detail, status, basis, period, companies, includeCancelled }),
+    [facts, groupBy, detail, status, basis, period.from, period.to, companies, includeCancelled],
+  );
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="space-y-4 pt-6">
+          <ChoiceRow
+            label="Group by"
+            options={GROUP_BY_LABELS}
+            value={groupBy}
+            onChange={(g) => {
+              setGroupBy(g);
+              setBasis(DEFAULT_DATE_BASIS[g]);
+            }}
+            testId="tx-group"
+          />
+          <div>
+            <ChoiceRow label="Show" options={DETAIL_LABELS} value={detail} onChange={setDetail} testId="tx-detail" />
+            <p className="mt-1.5 text-xs text-muted-foreground">{DETAIL_HELP[detail]}</p>
+          </div>
+          <div className="flex flex-wrap items-end gap-3 border-t pt-4">
+            <div className="space-y-1">
+              <Label>Date to use</Label>
+              <Select value={basis} onValueChange={(v) => setBasis(v as DateBasis)}>
+                <SelectTrigger className="w-40" data-testid="tx-basis"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(DATE_BASIS_LABELS) as DateBasis[]).map((b) => <SelectItem key={b} value={b}>{DATE_BASIS_LABELS[b]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <PeriodPicker label="Period" preset={preset} onPreset={setPreset} custom={custom} onCustom={setCustom} />
+            <div className="space-y-1">
+              <Label>Status</Label>
+              <Select value={status} onValueChange={(v) => setStatus(v as StatusFilter)}>
+                <SelectTrigger className="w-44" data-testid="tx-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(STATUS_LABELS) as StatusFilter[]).map((s) => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <MultiSelect label="Companies" options={companyOptions} value={companies} onChange={setCompanies} testId="tx-companies" />
+            <label className="flex h-9 items-center gap-1.5 text-sm">
+              <Checkbox checked={includeCancelled} onCheckedChange={(c) => setIncludeCancelled(!!c)} data-testid="tx-cancelled" />
+              Include cancelled
+            </label>
+          </div>
+        </CardContent>
+      </Card>
+      <ReportView table={table} settings={settings} />
     </div>
   );
 }

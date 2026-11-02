@@ -262,14 +262,8 @@ export function BatchEditor({ open, batch, onClose }: BatchEditorProps) {
         await apiRequest("POST", "/api/batches", { ...payload, status: "pending", voucherIds: selectedIds });
         return;
       }
-      await apiRequest("PATCH", `/api/batches/${batch.id}`, payload);
-      const existing = new Set(batchVouchers.map((v) => v.id));
-      const toAdd = selectedIds.filter((id) => !existing.has(id));
-      const toRemove = batchVouchers
-        .filter((v) => v.status !== "deposited" && !selectedIds.includes(v.id))
-        .map((v) => v.id);
-      if (toAdd.length > 0) await apiRequest("POST", `/api/batches/${batch.id}/vouchers`, { voucherIds: toAdd });
-      for (const id of toRemove) await apiRequest("DELETE", `/api/batches/${batch.id}/vouchers/${id}`);
+      // Details and voucher list are saved together in one transaction.
+      await apiRequest("PATCH", `/api/batches/${batch.id}`, { ...payload, voucherIds: selectedIds });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/batches"] });

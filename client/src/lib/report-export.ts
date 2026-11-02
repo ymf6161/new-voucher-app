@@ -103,6 +103,8 @@ export async function exportReportPDF(table: ReportTable, settings?: CompanySett
     head: [table.columns.map((c) => c.header)],
     body: table.rows.map((row) => row.map((v, i) => formatCell(v, table.columns[i]?.format || "text"))),
     foot: table.totals ? [table.totals.map((v, i) => formatCell(v, table.columns[i]?.format || "text"))] : undefined,
+    // Grand totals belong at the end, not under every page.
+    showFoot: "lastPage",
     theme: "striped",
     headStyles: { fillColor: [59, 130, 246], textColor: 255, fontSize: 8 },
     footStyles: { fillColor: [229, 236, 248], textColor: 20, fontStyle: "bold", fontSize: 8 },
