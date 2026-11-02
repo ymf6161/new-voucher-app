@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AutoCompleteDropdown } from "@/components/auto-complete-dropdown";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { isVoucherFullyEditable, onlyAlwaysEditable } from "@/lib/voucher-rules";
 import type { Name, Reference, VoucherCompany, VoucherWithRelations } from "@shared/schema";
 
 type FieldKey = "dateReceived" | "voucherCompanyId" | "receivedFromId" | "referenceId" | "type" | "status" | "notes";
@@ -29,8 +30,9 @@ interface BulkEditVouchersDialogProps {
   onDone: () => void;
 }
 
+/** Whether every field of the voucher can be bulk edited (not posted or banked). */
 export function isBulkEditable(voucher: VoucherWithRelations): boolean {
-  return ["unposted", "cancelled", "completed"].includes(voucher.status) && !voucher.batchId && !voucher.depositId;
+  return isVoucherFullyEditable(voucher);
 }
 
 export function BulkEditVouchersDialog({
@@ -46,9 +48,6 @@ export function BulkEditVouchersDialog({
   const [enabled, setEnabled] = useState<Partial<Record<FieldKey, boolean>>>({});
   const [values, setValues] = useState<Partial<Record<FieldKey, string>>>({});
   const [labels, setLabels] = useState<Partial<Record<FieldKey, string>>>({});
-
-  const editable = vouchers.filter(isBulkEditable);
-  const lockedCount = vouchers.length - editable.length;
 
   const set = (field: FieldKey, value: string, label?: string) => {
     setValues((prev) => ({ ...prev, [field]: value }));
@@ -72,6 +71,13 @@ export function BulkEditVouchersDialog({
         return [field, value];
       }),
   );
+  // Received from, reference and notes can change on any voucher. Any other
+  // field leaves out vouchers that are already posted or banked.
+  const changedFields = Object.keys(changes);
+  const detailsOnly = changedFields.length === 0 || onlyAlwaysEditable(changedFields);
+  const editable = detailsOnly ? vouchers : vouchers.filter(isBulkEditable);
+  const lockedCount = vouchers.filter((v) => !isBulkEditable(v)).length;
+
   const missingRequired =
     ["dateReceived", "voucherCompanyId", "type", "status"].some(
       (field) => enabled[field as FieldKey] && !values[field as FieldKey],
@@ -91,7 +97,7 @@ export function BulkEditVouchersDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       toast({
         title: `${result.updated} voucher(s) updated`,
-        description: result.skipped.length ? `${result.skipped.length} skipped because they are posted or deposited.` : undefined,
+        description: result.skipped.length ? `${result.skipped.length} skipped because they are posted or banked.` : undefined,
       });
       reset();
       onDone();
@@ -127,7 +133,10 @@ export function BulkEditVouchersDialog({
           <DialogTitle>Edit {editable.length} voucher(s)</DialogTitle>
           <DialogDescription>
             Tick the fields to change. Unticked fields keep their current values.
-            {lockedCount > 0 && ` ${lockedCount} selected voucher(s) are posted or deposited and will not be changed.`}
+            {lockedCount > 0 &&
+              (detailsOnly
+                ? ` ${lockedCount} selected voucher(s) are posted or banked: only Received from, Reference and Notes can be changed on those.`
+                : ` ${lockedCount} posted or banked voucher(s) will be skipped, because only Received from, Reference and Notes can change once a voucher is posted.`)}
           </DialogDescription>
         </DialogHeader>
 

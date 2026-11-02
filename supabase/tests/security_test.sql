@@ -124,10 +124,22 @@ SELECT tests.ok((SELECT count(*) FROM vouchers WHERE batch_id = :'batch1' AND st
 SELECT tests.fails($$SELECT save_batch('$$ || :'alice_acct' || $$', NULL, '{"voucher_company_id":"a-co1"}', ARRAY['a-v1'])$$,
   'no longer available', 'a posted voucher cannot go into a second batch');
 
-SELECT tests.fails($$UPDATE vouchers SET amount = 999 WHERE id = 'a-v1'$$, 'cannot be changed', 'a posted voucher cannot be edited');
-SELECT tests.fails($$DELETE FROM vouchers WHERE id = 'a-v1'$$, 'cannot be changed', 'a posted voucher cannot be deleted');
+SELECT tests.fails($$UPDATE vouchers SET amount = 999 WHERE id = 'a-v1'$$, 'posted or banked', 'a posted voucher''s amount cannot be edited');
+SELECT tests.fails($$UPDATE vouchers SET voucher_company_id = 'a-co2' WHERE id = 'a-v1'$$, 'posted or banked', 'a posted voucher''s company cannot be edited');
+SELECT tests.fails($$UPDATE vouchers SET status = 'unposted', batch_id = NULL WHERE id = 'a-v1'$$, 'posted or banked', 'a posted voucher cannot be unposted directly');
+SELECT tests.fails($$DELETE FROM vouchers WHERE id = 'a-v1'$$, 'posted or banked', 'a posted voucher cannot be deleted');
 SELECT tests.fails($$UPDATE vouchers SET batch_id = '$$ || :'batch1' || $$', status = 'posted' WHERE id = 'a-v4'$$,
-  'cannot be changed|posted and banked', 'a voucher cannot be posted by a direct update');
+  'posted and banked', 'a voucher cannot be posted by a direct update');
+
+-- Posted vouchers: received from, reference and notes stay editable.
+INSERT INTO "references" (id, account_id, reference) VALUES ('a-ref', :'alice_acct', 'Appeal');
+INSERT INTO names (id, account_id, name) VALUES ('a-name2', :'alice_acct', 'Second Person');
+SELECT tests.ok(tests.rows($$UPDATE vouchers SET received_from_id = 'a-name2', reference_id = 'a-ref', notes = 'fixed' WHERE id = 'a-v1'$$) = 1,
+  'a posted voucher''s received from, reference and notes can be changed');
+SELECT tests.ok((SELECT received_from_id = 'a-name2' AND reference_id = 'a-ref' AND notes = 'fixed' AND status = 'posted' FROM vouchers WHERE id = 'a-v1'),
+  'the change is saved and the voucher stays posted');
+SELECT tests.fails($$UPDATE vouchers SET notes = 'x', amount = 1 WHERE id = 'a-v1'$$, 'posted or banked', 'notes plus a locked field is refused as a whole');
+UPDATE vouchers SET received_from_id = 'a-name', reference_id = NULL, notes = NULL WHERE id = 'a-v1';
 SELECT tests.fails($$UPDATE batches SET amount_sent = 0 WHERE id = '$$ || :'batch1' || $$'$$, 'permission denied', 'batches cannot be updated directly');
 
 -- Edit the batch: swap a-v2 for a-v4.
@@ -144,9 +156,12 @@ SELECT tests.ok((SELECT status FROM batches WHERE id = :'batch2') = 'sent', 'bat
 
 -- Bulk edit ---------------------------------------------------------------
 INSERT INTO vouchers (id, account_id, voucher_company_id, amount) VALUES ('a-v5', :'alice_acct', 'a-co1', 2);
-SELECT bulk_update_vouchers(:'alice_acct', ARRAY['a-v1','a-v5'], '{"notes":"bulk"}') AS bulk \gset
-SELECT tests.ok((:'bulk'::jsonb)->>'updated' = '1' AND (:'bulk'::jsonb)->'skipped' = '["a-v1"]', 'bulk edit reports real count and skips posted vouchers');
-SELECT tests.ok((SELECT notes FROM vouchers WHERE id = 'a-v1') IS NULL, 'bulk edit left the posted voucher alone');
+SELECT bulk_update_vouchers(:'alice_acct', ARRAY['a-v1','a-v5'], '{"notes":"bulk","reference_id":"a-ref"}') AS bulk \gset
+SELECT tests.ok((:'bulk'::jsonb)->>'updated' = '2' AND (:'bulk'::jsonb)->'skipped' = '[]', 'bulk edit of notes/reference includes posted vouchers');
+SELECT tests.ok((SELECT notes = 'bulk' AND reference_id = 'a-ref' AND status = 'posted' FROM vouchers WHERE id = 'a-v1'), 'posted voucher took the bulk notes and reference');
+SELECT bulk_update_vouchers(:'alice_acct', ARRAY['a-v1','a-v5'], '{"type":"ACC","notes":"again"}') AS bulk \gset
+SELECT tests.ok((:'bulk'::jsonb)->>'updated' = '1' AND (:'bulk'::jsonb)->'skipped' = '["a-v1"]', 'bulk edit with a locked field reports real count and skips posted vouchers');
+SELECT tests.ok((SELECT type = 'PPV' AND notes = 'bulk' FROM vouchers WHERE id = 'a-v1'), 'bulk edit left the posted voucher alone');
 SELECT tests.fails($$SELECT bulk_update_vouchers('$$ || :'alice_acct' || $$', ARRAY['a-v5'], '{"status":"posted"}')$$,
   'unposted, cancelled or completed', 'bulk edit cannot set posted');
 SELECT tests.fails($$SELECT bulk_update_vouchers('$$ || :'alice_acct' || $$', ARRAY['a-v5'], '{"batch_id":"x"}')$$,
@@ -160,6 +175,9 @@ SELECT tests.fails($$SELECT create_deposit('$$ || :'alice_acct' || $$', '{"bank_
 
 SELECT create_deposit(:'alice_acct', '{"bank_id":"a-bank","voucher_company_id":"a-co1","amount_banked":"21"}', ARRAY['a-v1','a-v4']) AS dep1 \gset
 SELECT tests.ok((SELECT count(*) FROM vouchers WHERE deposit_id = :'dep1' AND status = 'deposited') = 2, 'deposit banks its vouchers');
+SELECT tests.ok(tests.rows($$UPDATE vouchers SET notes = 'banked note', reference_id = 'a-ref' WHERE id = 'a-v4'$$) = 1, 'a banked voucher''s notes and reference can be changed');
+SELECT tests.fails($$UPDATE vouchers SET quantity = 9 WHERE id = 'a-v4'$$, 'posted or banked', 'a banked voucher''s quantity cannot be changed');
+SELECT tests.fails($$UPDATE vouchers SET deposit_id = NULL, status = 'posted' WHERE id = 'a-v4'$$, 'posted or banked', 'a banked voucher cannot be un-banked directly');
 SELECT tests.fails($$SELECT save_batch('$$ || :'alice_acct' || $$', '$$ || :'batch1' || $$', '{}', ARRAY['a-v1'])$$,
   'banked vouchers', 'a batch with banked vouchers cannot be edited');
 SELECT tests.fails($$SELECT delete_batch('$$ || :'batch1' || $$')$$, 'banked vouchers', 'a batch with banked vouchers cannot be deleted');
@@ -178,6 +196,9 @@ SELECT tests.ok((SELECT deposit_id FROM vouchers WHERE id = 'a-v4') = :'dep1', '
 
 SELECT set_config('request.jwt.claim.sub', 'b0000000-0000-0000-0000-00000000000b', false);
 SELECT tests.fails($$SELECT delete_deposit('$$ || :'dep1' || $$')$$, 'not allowed', 'Bob cannot delete Alice''s deposit');
+SELECT tests.ok(tests.rows($$UPDATE vouchers SET notes = 'hacked' WHERE id = 'a-v4'$$) = 0, 'Bob cannot change notes on Alice''s banked voucher');
+SELECT bulk_update_vouchers(:'bob_acct', ARRAY['a-v4'], '{"notes":"hacked"}') AS bobbulk \gset
+SELECT tests.ok((:'bobbulk'::jsonb)->>'updated' = '0', 'Bob cannot bulk edit notes on Alice''s voucher from his own account');
 SELECT tests.fails($$SELECT update_deposit('$$ || :'dep1' || $$', '{"amount_banked":"0"}')$$, 'not allowed', 'Bob cannot edit Alice''s deposit');
 SELECT tests.fails($$SELECT set_batch_status('$$ || :'batch1' || $$', 'sent')$$, 'not allowed', 'Bob cannot change Alice''s batch');
 SELECT set_config('request.jwt.claim.sub', 'a0000000-0000-0000-0000-00000000000a', false);
