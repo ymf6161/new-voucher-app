@@ -208,7 +208,14 @@ export function DataTable<T extends { id: string }>({
 
   const handleSelectAll = (checked: boolean) => {
     if (onSelectionChange) {
-      onSelectionChange(checked ? sortedData.map((item) => item.id) : []);
+      // Only add or remove the rows on screen, so a selection made under
+      // another filter or search is kept.
+      const visible = new Set(sortedData.map((item) => item.id));
+      onSelectionChange(
+        checked
+          ? Array.from(new Set([...selectedIds, ...visible]))
+          : selectedIds.filter((id) => !visible.has(id)),
+      );
     }
   };
 

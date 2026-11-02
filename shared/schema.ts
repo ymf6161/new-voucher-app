@@ -123,6 +123,9 @@ export type Deposit = {
   voucherCompanyId: string | null;
   recipientNameId?: string | null;
   amountBanked: string;
+  /** Banked amount minus the vouchers' value (e.g. a bank fee), with its reason. */
+  adjustmentAmount?: string | null;
+  adjustmentReason?: string | null;
   reference: string | null;
   notes: string | null;
 };

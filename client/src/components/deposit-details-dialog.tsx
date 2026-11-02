@@ -71,8 +71,9 @@ export function DepositDetailsDialog({ deposit, onClose }: DepositDetailsDialogP
     if (deposit) {
       setEditedAmount(deposit.amountBanked);
       setEditedNotes(deposit.notes || "");
-      setAdjustmentAmount("");
-      setAdjustmentReason("");
+      // Start from the stored adjustment, so saving other changes keeps it.
+      setAdjustmentAmount(deposit.adjustmentAmount ? String(deposit.adjustmentAmount) : "");
+      setAdjustmentReason(deposit.adjustmentReason || "");
       setSelectedVoucherIds([]);
     }
   }, [deposit]);
@@ -283,6 +284,13 @@ export function DepositDetailsDialog({ deposit, onClose }: DepositDetailsDialogP
                   className="resize-none"
                   data-testid="input-edit-notes"
                 />
+              </div>
+            )}
+
+            {!isEditing && deposit.adjustmentAmount && Number(deposit.adjustmentAmount) !== 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/20" data-testid="text-deposit-adjustment">
+                <span className="font-medium">Adjustment {formatCurrency(deposit.adjustmentAmount)}</span>
+                {deposit.adjustmentReason && <span className="text-muted-foreground"> · {deposit.adjustmentReason}</span>}
               </div>
             )}
 
