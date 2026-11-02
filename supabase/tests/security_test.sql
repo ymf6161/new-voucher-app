@@ -210,6 +210,40 @@ SELECT delete_batch(:'batch1');
 SELECT tests.ok((SELECT count(*) FROM vouchers WHERE id IN ('a-v1','a-v4') AND status = 'unposted' AND batch_id IS NULL) = 2,
   'deleting a batch returns its vouchers to unposted');
 
+-- Banking part of a line ----------------------------------------------------
+-- a-v1 is 2 x £10 and a-v4 is 1 x £1, both unposted again at this point.
+SELECT save_batch(:'alice_acct', NULL, '{"voucher_company_id":"a-co1"}', ARRAY['a-v1','a-v4']) AS batch3 \gset
+SELECT count(*) AS rows_before FROM vouchers WHERE account_id = :'alice_acct' \gset
+SELECT tests.fails($$SELECT create_deposit('$$ || :'alice_acct' || $$', '{"bank_id":"a-bank","voucher_company_id":"a-co1","amount_banked":"1"}', ARRAY['a-v1','a-v5'], '{"a-v1":1}')$$,
+  'no longer available', 'a deposit with an unpostable voucher is refused');
+SELECT tests.ok((SELECT count(*) FROM vouchers WHERE account_id = :'alice_acct') = :rows_before AND (SELECT quantity FROM vouchers WHERE id = 'a-v1') = 2,
+  'a refused deposit leaves no split behind');
+SELECT tests.fails($$SELECT create_deposit('$$ || :'alice_acct' || $$', '{"bank_id":"a-bank","voucher_company_id":"a-co1","amount_banked":"1"}', ARRAY['a-v1'], '{"a-v1":3}')$$,
+  'between 1 and 2', 'cannot bank more vouchers than the line holds');
+SELECT tests.fails($$SELECT create_deposit('$$ || :'alice_acct' || $$', '{"bank_id":"a-bank","voucher_company_id":"a-co1","amount_banked":"1"}', ARRAY['a-v1'], '{"a-v1":0}')$$,
+  'between 1 and 2', 'cannot bank zero vouchers from a line');
+
+SELECT create_deposit(:'alice_acct',
+  '{"bank_id":"a-bank","voucher_company_id":"a-co1","amount_banked":"10.50","date_deposited":"2026-10-30","adjustment_amount":"-0.50","adjustment_reason":"Bank fee"}',
+  ARRAY['a-v1','a-v4'], '{"a-v1":1}') AS dep3 \gset
+SELECT tests.ok((SELECT quantity = 1 AND status = 'posted' AND deposit_id IS NULL AND batch_id = :'batch3' FROM vouchers WHERE id = 'a-v1'),
+  'the rest of a split line stays posted in its batch');
+SELECT tests.ok((SELECT count(*) = 2 AND sum(quantity) = 2 AND sum(amount * quantity) = 11 FROM vouchers WHERE deposit_id = :'dep3'),
+  'the deposit holds 1 of the 2-voucher line plus the single voucher');
+SELECT tests.ok((SELECT count(*) FROM vouchers v JOIN vouchers o ON o.id = 'a-v1'
+                 WHERE v.deposit_id = :'dep3' AND v.id <> 'a-v4'
+                   AND v.voucher_company_id = o.voucher_company_id AND v.amount = o.amount AND v.batch_id = o.batch_id
+                   AND v.received_from_id IS NOT DISTINCT FROM o.received_from_id AND v.type = o.type) = 1,
+  'the split-off line keeps every detail of the original');
+SELECT tests.ok((SELECT amount_sent FROM batches WHERE id = :'batch3') = 21, 'the batch total is unchanged by the split');
+SELECT tests.ok((SELECT date_deposited::date = '2026-10-30' AND adjustment_amount = -0.50 AND adjustment_reason = 'Bank fee' FROM deposits WHERE id = :'dep3'),
+  'a deposit can be back-dated and carry an adjustment');
+SELECT add_deposit_vouchers(:'dep3', ARRAY['a-v1'], '{"a-v1":1}');
+SELECT tests.ok((SELECT deposit_id FROM vouchers WHERE id = 'a-v1') = :'dep3', 'the rest of the line can be banked later');
+SELECT tests.fails($$SELECT vf_split_voucher('a-v5', 1)$$, 'permission denied', 'the split helper cannot be called through the API');
+SELECT delete_deposit(:'dep3');
+SELECT delete_batch(:'batch3');
+
 -- Roles --------------------------------------------------------------------
 SELECT set_config('request.jwt.claim.sub', 'c0000000-0000-0000-0000-00000000000c', false);
 SELECT tests.ok((SELECT count(*) FROM banks WHERE account_id = :'alice_acct') = 1, 'a plain user can read banks');

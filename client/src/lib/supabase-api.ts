@@ -464,11 +464,13 @@ async function handlePost(path: string, body: any): Promise<Response> {
 
   // --- Deposits ---
   if (cleanPath === "/api/deposits") {
-    const { voucherIds = [], ...depositData } = data;
+    // quantities: { voucherId: how many of that line to bank } for partly banked lines.
+    const { voucherIds = [], quantities = {}, ...depositData } = data;
     const id = await rpc<string>("create_deposit", {
       p_account_id: aid,
       p_deposit: snakeCase(depositData),
       p_voucher_ids: voucherIds,
+      p_quantities: quantities,
     });
     return jsonResponse({ id }, 201);
   }
@@ -485,7 +487,11 @@ async function handlePost(path: string, body: any): Promise<Response> {
   // --- Add vouchers to deposit ---
   const depositVouchersMatch = cleanPath.match(/^\/api\/deposits\/([^/]+)\/vouchers$/);
   if (depositVouchersMatch) {
-    await rpc("add_deposit_vouchers", { p_deposit_id: depositVouchersMatch[1], p_voucher_ids: data.voucherIds || [] });
+    await rpc("add_deposit_vouchers", {
+      p_deposit_id: depositVouchersMatch[1],
+      p_voucher_ids: data.voucherIds || [],
+      p_quantities: data.quantities || {},
+    });
     return jsonResponse({ ok: true });
   }
 
