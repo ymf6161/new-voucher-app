@@ -73,7 +73,7 @@ export function BatchDetailsDialog({ batch, onClose, settings }: BatchDetailsDia
             <StatusBadge status={batch.status} />
           </DialogTitle>
           <DialogDescription>
-            Sent to {batchSentTo(batch)} on {formatDate(batch.dateSent)}
+            Sent to {batchSentTo(batch)} on {formatDate(batch.batchDate || batch.dateSent)}
           </DialogDescription>
         </DialogHeader>
 

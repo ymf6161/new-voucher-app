@@ -132,15 +132,15 @@ export default function Batches() {
   const batchFilters: FilterDef<BatchWithRelations>[] = [
     { key: "status", label: "Status", type: "select", value: (b) => b.status },
     { key: "sentTo", label: "Sent to", type: "select", value: (b) => b.recipient?.name || b.voucherCompany?.name },
-    { key: "date", label: "Date Sent", type: "dateRange", value: (b) => b.dateSent },
+    { key: "date", label: "Batch Date", type: "dateRange", value: (b) => b.batchDate || b.dateSent },
   ];
 
   const columns: Column<BatchWithRelations>[] = [
     {
-      key: "dateSent",
-      header: "Date Sent",
-      value: (batch) => String(batch.dateSent),
-      render: (batch) => formatDate(batch.dateSent),
+      key: "batchDate",
+      header: "Batch Date",
+      value: (batch) => String(batch.batchDate || batch.dateSent),
+      render: (batch) => formatDate(batch.batchDate || batch.dateSent),
       className: "whitespace-nowrap",
     },
     {

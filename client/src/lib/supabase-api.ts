@@ -173,7 +173,7 @@ async function fetchVouchers(params: URLSearchParams): Promise<VoucherWithRelati
 async function fetchBatches(): Promise<BatchWithRelations[]> {
   const aid = accountId();
   const [batches, vouchers, companies, names, banks] = await Promise.all([
-    fetchAll(() => supabase.from("batches").select("*").eq("account_id", aid).order("date_sent", { ascending: false }).order("id")),
+    fetchAll(() => supabase.from("batches").select("*").eq("account_id", aid).order("batch_date", { ascending: false }).order("id")),
     fetchAccountRows("vouchers", "id, voucher_company_id, quantity, amount, status, batch_id, deposit_id"),
     lookup<VoucherCompany>("voucher_companies"),
     lookup<Name>("names", "id, name"),
@@ -431,6 +431,24 @@ async function handlePost(path: string, body: any): Promise<Response> {
   const cleanPath = path.replace(/\/$/, "") || "/";
   const aid = accountId();
   const data = typeof body === "object" && body !== null ? body : {};
+
+  if (cleanPath === "/api/vouchers/import") {
+    if (!Array.isArray(data.vouchers) || data.vouchers.length === 0) {
+      return jsonResponse({ error: "At least one voucher is required." }, 400);
+    }
+    if (data.vouchers.length > 500) {
+      return jsonResponse({ error: "Import is limited to 500 vouchers at a time." }, 400);
+    }
+    const inserts = data.vouchers.map((voucher: Record<string, any>) => {
+      const insert: Record<string, any> = { ...snakeCase(voucher), account_id: aid, status: "unposted" };
+      delete insert.batch_id;
+      delete insert.deposit_id;
+      return insert;
+    });
+    const { data: inserted, error } = await supabase.from("vouchers").insert(inserts).select("id");
+    if (error) throw new Error(error.message);
+    return jsonResponse({ imported: inserted?.length || 0 }, 201);
+  }
 
   // --- Batches ---
   if (cleanPath === "/api/batches") {
